@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Uma rosa para Serrozeth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#000; --hud:#4d4d4d; --name:#f4ecec; --glow:rgba(225,30,55,.55); }
+  html,body { margin:0; height:100%; background:var(--bg); overflow:hidden; }
+  body { font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace; cursor:pointer; }
+  canvas { display:block; position:fixed; inset:0; }
+  #name {
+    position:fixed; left:0; right:0; margin:0; text-align:center; padding:0 16px;
+    font-family:'Great Vibes',cursive; font-weight:400; font-size:clamp(44px,min(12vw,10vh),104px); line-height:1.1;
+    color:var(--name); text-shadow:0 0 14px var(--glow),0 0 40px rgba(225,30,55,.25);
+    white-space:nowrap;
+  }
+  #name span { opacity:0; filter:blur(6px); transition:opacity .6s, filter .6s, color 1.2s; color:#e0283f; }
+  #name span.on { opacity:1; filter:blur(0); color:var(--name); }
+  #name .heart { display:inline-block; margin-left:.12em; font-family:serif; font-size:.55em; vertical-align:.25em; color:#e0283f; filter:none;
+    text-shadow:0 0 12px rgba(225,30,55,.8); opacity:0; transform:scale(.2); transition:opacity .8s, transform .8s cubic-bezier(.3,1.6,.5,1); }
+  #name .heart.on { opacity:1; transform:scale(1); color:#e0283f; animation:beat 1.6s 1.2s ease-in-out infinite; }
+  @keyframes beat { 0%,100% { transform:scale(1); } 15% { transform:scale(1.18); } 30% { transform:scale(1); } 45% { transform:scale(1.1); } }
+  .hud { position:fixed; color:var(--hud); font-size:10px; line-height:1.45; white-space:pre; pointer-events:none; transition:opacity 1.5s; }
+  body.done .hud { opacity:0; }
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Uma rosa vermelha feita de caracteres desabrocha"></canvas>
+<h1 id="name" aria-label="Serrozeth Bunjei"></h1>
+<div class="hud" id="h1" style="top:12px;left:14px">rose.py · ascii render</div>
+<div class="hud" id="h2" style="bottom:12px;left:14px"></div>
+<div class="hud" id="h3" style="bottom:12px;right:14px;text-align:right"></div>
+<script>
+const NAME = 'Serrozeth Bunjei';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const nameEl = document.getElementById('name'), h2 = document.getElementById('h2'), h3 = document.getElementById('h3');
+const RAMP = '.,:;-=+*oxa%#&@';
+const LX = -0.42, LY = 0.62, LZ = 0.66; // light direction (normalized enough)
+const TILT = 0.42, ct = Math.cos(TILT), st = Math.sin(TILT);
+const T_NAME = 13.2;
+
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const clampi = (x, a, b) => clamp(Math.ceil(x), a, b);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const stemX = y => 0.045 * Math.sin(y * 2.2);
+
+let W, H, S, cw, ch, cols, rows, cx, cy, font, zbuf, lbuf, mbuf, ibuf, sid = 0, dust = [], stars = [];
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  S = Math.min(H * 0.62 / 2.7, W * 0.9 / 1.7);
+  cw = clamp(S / 56, 3.8, 7);
+  const fs = cw / 0.6; ch = fs * 1.1;
+  font = `${fs.toFixed(1)}px 'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace`;
+  cols = Math.ceil(W / cw); rows = Math.ceil(H / ch);
+  cx = W / 2; cy = H * 0.36;
+  zbuf = new Float32Array(cols * rows); lbuf = new Float32Array(cols * rows); mbuf = new Uint8Array(cols * rows); ibuf = new Uint16Array(cols * rows);
+  nameEl.style.top = (cy + 1.6 * ct * S + ch * 2.2) + 'px';
+  const rnd = mulberry(7);
+  dust = Array.from({ length: Math.round(W * H / 4200) }, () => ({ x: rnd() * W, y: rnd() * H, v: 4 + rnd() * 10, p: rnd() * 6.28, c: '.·.:*+'[rnd() * 6 | 0], b: rnd() }));
+  stars = Array.from({ length: 22 }, () => ({ x: rnd() * W, y: rnd() * H * 0.85, p: rnd() * 6.28, s: 0.6 + rnd() * 1.4, r: 6 + rnd() * 16, b: rnd() }));
+}
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// ---- rasterizer: 3D point + normal -> nearest char cell ----
+let ca = 1, sa = 0;
+function plot(x, y, z, nx, ny, nz, mat, shade) {
+  const X = x * ca + z * sa, Z = -x * sa + z * ca;
+  const Y2 = y * ct - Z * st, Z2 = y * st + Z * ct;
+  const c = Math.floor((cx + X * S) / cw), r = Math.floor((cy - Y2 * S) / ch);
+  if (c < 0 || r < 0 || c >= cols || r >= rows) return;
+  const i = r * cols + c;
+  if (Z2 <= zbuf[i]) return;
+  let NX = nx * ca + nz * sa; const NZ = -nx * sa + nz * ca;
+  let NY = ny * ct - NZ * st, NZ2 = ny * st + NZ * ct;
+  if (NZ2 < 0) { NX = -NX; NY = -NY; NZ2 = -NZ2; } // two-sided surfaces
+  const d = Math.max(0, (NX * LX + NY * LY + NZ2 * LZ + 0.4) / 1.4); // slight wrap: keeps undersides readable without flattening contrast
+  zbuf[i] = Z2; lbuf[i] = (0.38 + 0.62 * d) * shade; mbuf[i] = mat; ibuf[i] = sid;
+}
+
+const G = new Float32Array(3 * 201 * 201), TMP = [0, 0, 0];
+function surface(Nu, Nv, f, mat, shadeF) {
+  const sd = Nv + 1; sid++;
+  for (let i = 0; i <= Nu; i++) for (let j = 0; j <= Nv; j++) {
+    f(i / Nu, j / Nv * 2 - 1, i, TMP); const k = 3 * (i * sd + j);
+    G[k] = TMP[0]; G[k + 1] = TMP[1]; G[k + 2] = TMP[2];
+  }
+  for (let i = 0; i <= Nu; i++) {
+    const a0 = i > 0 ? i - 1 : i, a1 = i < Nu ? i + 1 : i;
+    for (let j = 0; j <= Nv; j++) {
+      const b0 = j > 0 ? j - 1 : j, b1 = j < Nv ? j + 1 : j;
+      const a = 3 * (a0 * sd + j), b = 3 * (a1 * sd + j), c = 3 * (i * sd + b0), d = 3 * (i * sd + b1);
+      const ux = G[b] - G[a], uy = G[b + 1] - G[a + 1], uz = G[b + 2] - G[a + 2];
+      const vx = G[d] - G[c], vy = G[d + 1] - G[c + 1], vz = G[d + 2] - G[c + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, m = Math.hypot(nx, ny, nz) || 1;
+      const k = 3 * (i * sd + j);
+      plot(G[k], G[k + 1], G[k + 2], nx / m, ny / m, nz / m, mat, shadeF(i / Nu, j / Nv * 2 - 1));
+    }
+  }
+}
+
+// ---- rose parts ----
+const PR = new Float32Array(201), PY = new Float32Array(201), PW = new Float32Array(201);
+function petal(theta, r0, L, Wd, phi0, curl, open, mat, shadeK, by, cup = 1.25) {
+  if (L <= 0.002) return;
+  const Nu = clampi(L * S / ch * 2.2, 4, 200), Nv = clampi(2 * Wd * S / cw * 1.5, 3, 200);
+  let r = r0, y = 0; PR[0] = r; PY[0] = y;
+  for (let i = 1; i <= Nu; i++) { const u = i / Nu, phi = phi0 * (1 - cup * u) + curl * u * u * u; r += L / Nu * Math.sin(phi); y += L / Nu * Math.cos(phi); PR[i] = r; PY[i] = y; }
+  for (let i = 0; i <= Nu; i++) PW[i] = Wd * Math.pow(Math.sin(Math.PI * (0.08 + 0.62 * i / Nu)), 0.8);
+  surface(Nu, Nv, (u, v, i, o) => {
+    const w = PW[i];
+    const R = PR[i] + open * v * v * u * u * L * 0.2;
+    const a = theta + clamp(v * w / Math.max(R, 0.05), -1.5, 1.5);
+    o[0] = R * Math.cos(a); o[1] = by + PY[i] - open * v * v * u * L * 0.08; o[2] = R * Math.sin(a);
+  }, mat, (u, v) => shadeK * (0.7 + 0.3 * u) * (1 - 0.15 * v * v * (1 - u)) * (1 - 0.7 * v ** 6)); // dark petal edges separate the petals
+}
+
+function leaf(y0, alpha, len, wid) {
+  if (len <= 0.002) return;
+  const bx = stemX(y0), ce = Math.cos(0.5), se = Math.sin(0.5);
+  const dx = Math.cos(alpha) * ce, dz = Math.sin(alpha) * ce, sx = -Math.sin(alpha), sz = Math.cos(alpha);
+  surface(clampi(len * S / cw * 1.6, 4, 200), clampi(2 * wid * S / ch * 2.2, 3, 200), (u, v, i, o) => {
+    const w = wid * Math.pow(Math.sin(Math.PI * Math.pow(u, 0.7)), 0.9), t = u * len;
+    o[0] = bx + dx * t + sx * v * w; o[1] = y0 + se * t - u * u * len * 0.45 + Math.abs(v) * w * 0.35; o[2] = dz * t + sz * v * w;
+  }, 2, (u, v) => 0.6 + 0.4 * Math.min(1, Math.abs(v) * 6)); // darker midrib
+}
+
+function stem(top) {
+  const n = clampi((top + 1.6) * S / ch * 2.5, 2, 900), rad = 0.028;
+  for (let i = 0; i <= n; i++) {
+    const y = -1.6 + (top + 1.6) * i / n, x = stemX(y);
+    for (let k = 0; k < 10; k++) { const a = k / 10 * 6.283; plot(x + rad * Math.cos(a), y, rad * Math.sin(a), Math.cos(a), 0, Math.sin(a), 2, 0.95); }
+  }
+}
+
+const LAYERS = [3, 4, 5, 6], PHI = [0.6, 0.8, 0.95, 1.1], CURL = [-0.35, -0.05, 0.25, 0.55]; // petals leave the base outward then cup in: round bowl, not a cone
+function rose(t) {
+  const stemG = smooth(0, 2.6, t), leafG = smooth(1.8, 4.4, t), budG = smooth(2.9, 4.4, t), bloom = smooth(4.2, 13, t);
+  stem(-1.6 + 1.6 * stemG);
+  leaf(-0.72, 0.35, 0.55 * leafG, 0.16 * leafG);
+  leaf(-1.08, Math.PI + 0.55, 0.5 * smooth(2.2, 4.8, t), 0.15 * smooth(2.2, 4.8, t));
+  if (budG <= 0) return { stemG, bloom };
+  const so = smooth(0, 0.35, bloom), sz = 1.3 * budG * (0.55 + 0.45 * smooth(0, 0.7, bloom));
+  for (let j = 0; j < 5; j++) petal(j * 1.2566 + 0.3, 0.04, 0.3 * budG, 0.07 * budG, lerp(0.25, 1.75, so), lerp(0.2, 0.9, so), 0, 2, 0.8, 0, 0);
+  for (let k = 3; k >= 0; k--) {
+    const o = smooth((3 - k) * 0.13, 0.5 + (3 - k) * 0.13, bloom), n = LAYERS[k];
+    for (let j = 0; j < n; j++)
+      petal(j * 6.283 / n + k * 0.63, 0.04 + 0.03 * k, (0.34 + 0.05 * k) * sz, (0.14 + 0.06 * k) * sz,
+        lerp(0.3 + 0.04 * k, PHI[k], o), lerp(-0.35, CURL[k], o), o, 1, 0.78 + 0.07 * k, -0.02);
+  }
+  return { stemG, bloom };
+}
+
+// ---- drawing ----
+const buckets = Array.from({ length: 48 }, () => []);
+function color(mat, q) {
+  const l = q / 15;
+  if (mat === 1) return l > 0.88 ? `hsl(350,70%,${62 + 10 * (l - 0.88) / 0.12}%)` : `hsl(${349 + 6 * l},88%,${18 + 56 * l}%)`;
+  return `hsl(132,68%,${18 + 44 * l}%)`;
+}
+
+let start = performance.now(), last = start, fps = 60, frame = 0, nameStarted = false;
+if (matchMedia('(prefers-reduced-motion: reduce)').matches) start -= 15000;
+
+function draw(now) {
+  const t = (now - start) / 1000;
+  fps = lerp(fps, 1000 / Math.max(1, now - last), 0.05); last = now; frame++;
+  const spin = 0.6 + t * 0.16; ca = Math.cos(spin); sa = Math.sin(spin);
+  zbuf.fill(-1e9); mbuf.fill(0); sid = 0;
+  const { stemG, bloom } = rose(t);
+
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  // soft red glow behind the bloom
+  if (bloom > 0) {
+    const gy = cy - 0.25 * S, g = ctx.createRadialGradient(cx, gy, 0, cx, gy, S * 0.9);
+    g.addColorStop(0, `rgba(210,30,60,${0.22 * bloom})`); g.addColorStop(1, 'rgba(190,20,45,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // dust: more of it as time goes on
+  const dn = Math.floor(dust.length * smooth(0.5, 12, t));
+  ctx.font = `${Math.max(9, cw * 1.4).toFixed(0)}px monospace`; ctx.textBaseline = 'top';
+  for (let i = 0; i < dn; i++) {
+    const d = dust[i]; d.y -= d.v / 60; if (d.y < -10) d.y = H + 10;
+    const a = (0.15 + 0.55 * d.b) * (0.5 + 0.5 * Math.sin(t * 1.7 + d.p));
+    ctx.fillStyle = `rgba(230,225,225,${a.toFixed(3)})`; ctx.fillText(d.c, d.x, d.y);
+  }
+  // 4-point twinkling stars
+  const sn = Math.floor(stars.length * smooth(1.5, 11, t));
+  for (let i = 0; i < sn; i++) {
+    const s = stars[i], a = Math.pow(Math.max(0, Math.sin(t * s.s + s.p)), 6);
+    if (a < 0.02) continue;
+    const r = s.r * (0.6 + 0.4 * a);
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      const g = ctx.createLinearGradient(s.x - dx * r, s.y - dy * r, s.x + dx * r, s.y + dy * r);
+      g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.5, `rgba(255,250,250,${a})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.strokeStyle = g; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(s.x - dx * r, s.y - dy * r); ctx.lineTo(s.x + dx * r, s.y + dy * r); ctx.stroke();
+    }
+    ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.fillRect(s.x - 1, s.y - 1, 2, 2);
+  }
+  // growing tip light while the stem draws itself
+  if (stemG > 0 && stemG < 1) {
+    const ty = -1.6 + 1.6 * stemG, px = cx + stemX(ty) * ca * S, py = cy - ty * ct * S;
+    const g = ctx.createRadialGradient(px, py, 0, px, py, ch * 3);
+    g.addColorStop(0, 'rgba(200,255,210,.55)'); g.addColorStop(1, 'rgba(120,255,150,0)');
+    ctx.fillStyle = g; ctx.fillRect(px - ch * 3, py - ch * 3, ch * 6, ch * 6);
+  }
+  // rose characters, batched by color
+  for (const b of buckets) b.length = 0;
+  let chars = 0;
+  for (let i = 0; i < mbuf.length; i++) {
+    const m = mbuf[i]; if (!m) continue;
+    buckets[m * 16 + Math.min(15, Math.floor(clamp(lbuf[i], 0, 1) * 16))].push(i); chars++;
+  }
+  ctx.font = font;
+  for (let k = 16; k < 48; k++) {
+    const b = buckets[k]; if (!b.length) continue;
+    const q = k & 15; ctx.fillStyle = color(k >> 4, q);
+    const chr = RAMP[Math.min(RAMP.length - 1, Math.floor(q / 16 * RAMP.length))];
+    for (const i of b) ctx.fillText(chr, (i % cols) * cw, Math.floor(i / cols) * ch);
+  }
+
+  h2.textContent = `bloom  ${(bloom * 100).toFixed(1).padStart(5)}%\nchars  ${chars}\nspin   ${(spin % 6.283).toFixed(2)} rad`;
+  h3.textContent = `fps ${fps.toFixed(0)}\nframe ${String(frame).padStart(5, '0')}`;
+  if (t >= T_NAME && !nameStarted) { nameStarted = true; document.body.classList.add('done'); revealName(); }
+  requestAnimationFrame(draw);
+}
+
+let nameTimers = [];
+function revealName() {
+  nameEl.innerHTML = '';
+  [...NAME].forEach((c, i) => {
+    const sp = document.createElement('span'); sp.setAttribute('aria-hidden', 'true');
+    sp.textContent = c; nameEl.appendChild(sp);
+    nameTimers.push(setTimeout(() => sp.classList.add('on'), i * 110));
+  });
+  // plain text once revealed, so the script letters join up again
+  const heart = document.createElement('span'); heart.className = 'heart'; heart.setAttribute('aria-hidden', 'true'); heart.textContent = '♥';
+  nameEl.appendChild(heart);
+  nameTimers.push(setTimeout(() => heart.classList.add('on'), NAME.length * 110 + 300));
+  nameTimers.push(setTimeout(() => { nameEl.textContent = NAME; nameEl.appendChild(heart); }, NAME.length * 110 + 1300));
+}
+
+addEventListener('resize', resize);
+addEventListener('click', () => { // tap to replay
+  nameTimers.forEach(clearTimeout); nameTimers = [];
+  nameEl.innerHTML = ''; nameStarted = false; document.body.classList.remove('done'); start = performance.now(); resize();
+});
+resize();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
